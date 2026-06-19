@@ -1,0 +1,13 @@
+# DCN config
+epochs: 500
+train_batch_size: 4096
+learning_rate: 0.001
+weight_decay: 0.000001
+train_neg_per_positive: 2
+rating_threshold: 3
+topn: 10
+recommendation_topn: 100
+valid_interval: 1
+early_stop_patience: 10
+min_delta: 0.000001
+seed: 2020

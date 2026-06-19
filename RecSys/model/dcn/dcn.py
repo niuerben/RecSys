@@ -6,6 +6,8 @@ This wrapper keeps the same call style as the collaborative filtering modules:
 generate dataset -> train/calc -> evaluate -> generate recommendations.
 """
 
+import argparse
+import copy
 import csv
 import os
 import sys
@@ -87,7 +89,15 @@ class DCN(object):
         train_neg_per_positive=2,
         epochs=5,
         batch_size=8192,
+        learning_rate=1e-3,
+        weight_decay=1e-6,
         seed=0,
+        recommendation_topn=100,
+        valid_interval=1,
+        early_stop_patience=10,
+        min_delta=1e-6,
+        save_epoch_recommendations=False,
+        epoch_recommendation_dir="./outputs",
     ):
         self.topn = topn
         self.rating_threshold = rating_threshold
@@ -96,7 +106,15 @@ class DCN(object):
         self.train_neg_per_positive = train_neg_per_positive
         self.epochs = epochs
         self.batch_size = batch_size
+        self.learning_rate = learning_rate
+        self.weight_decay = weight_decay
         self.seed = seed
+        self.recommendation_topn = recommendation_topn
+        self.valid_interval = valid_interval
+        self.early_stop_patience = early_stop_patience
+        self.min_delta = min_delta
+        self.save_epoch_recommendations = save_epoch_recommendations
+        self.epoch_recommendation_dir = epoch_recommendation_dir
 
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.model = None
@@ -112,16 +130,19 @@ class DCN(object):
         self.movie_index_lookup = None
         self.rated_by_user = defaultdict(set)
         self.train_rated_by_user = defaultdict(set)
+        self.valid_positive_by_user = defaultdict(set)
         self.test_positive_by_user = defaultdict(set)
+        self.best_epoch = 0
+        self.best_valid_mrr = -1.0
 
     def generate_dataset(self, mergedfile):
         print("使用设备:%s" % self.device)
-        print("加载数据...")
-        data = pd.read_csv(mergedfile)
-        data = data[data["rating"] >= self.rating_threshold].copy()
+        print("加载 DCN 数据...")
+        full_data = pd.read_csv(mergedfile)
+        data = full_data[full_data["rating"] >= self.rating_threshold].copy()
         rng = np.random.default_rng(self.seed)
 
-        self.user_ids = sorted(data["user_id"].unique())
+        self.user_ids = sorted(full_data["user_id"].unique())
         self.movie_ids = sorted(data["movie_id"].unique())
         self.user2idx = {user_id: idx for idx, user_id in enumerate(self.user_ids)}
         self.movie2idx = {movie_id: idx for idx, movie_id in enumerate(self.movie_ids)}
@@ -130,11 +151,13 @@ class DCN(object):
         for movie_id, movie_idx in self.movie2idx.items():
             self.movie_index_lookup[int(movie_id)] = movie_idx
 
-        gender2idx = {value: idx for idx, value in enumerate(sorted(data["gender"].unique()))}
-        age2idx = {value: idx for idx, value in enumerate(sorted(data["age"].unique()))}
-        occupation2idx = {value: idx for idx, value in enumerate(sorted(data["occupation"].unique()))}
+        gender2idx = {value: idx for idx, value in enumerate(sorted(full_data["gender"].unique()))}
+        age2idx = {value: idx for idx, value in enumerate(sorted(full_data["age"].unique()))}
+        occupation2idx = {
+            value: idx for idx, value in enumerate(sorted(full_data["occupation"].unique()))
+        }
 
-        users = data[["user_id", "gender", "age", "occupation"]].drop_duplicates("user_id")
+        users = full_data[["user_id", "gender", "age", "occupation"]].drop_duplicates("user_id")
         for row in users.itertuples(index=False):
             self.user_features[int(row.user_id)] = (
                 gender2idx[row.gender],
@@ -160,20 +183,30 @@ class DCN(object):
         train_split = int(len(rows) * self.train_ratio)
         valid_split = int(len(rows) * (self.train_ratio + self.valid_ratio))
         train_rows = rows[:train_split]
+        valid_rows = rows[train_split:valid_split]
         test_rows = rows[valid_split:]
 
         for user_id, movie_id, _ in rows:
             self.rated_by_user[int(user_id)].add(int(movie_id))
         for user_id, movie_id, _ in train_rows:
             self.train_rated_by_user[int(user_id)].add(int(movie_id))
+        for user_id, movie_id, rating in valid_rows:
+            self.valid_positive_by_user[int(user_id)].add(int(movie_id))
         for user_id, movie_id, rating in test_rows:
             self.test_positive_by_user[int(user_id)].add(int(movie_id))
 
         self.train_arrays = self._build_train_arrays(train_rows, rng)
 
         print(
-            "用户数:%d，电影数:%d，Top%d评估推荐位:%d"
-            % (len(self.user_ids), len(self.movie_ids), self.topn, len(self.user_ids) * self.topn)
+            "用户数:%d，电影数:%d，交互数:%d，训练:%d，Top%d 推荐列: %d"
+            % (
+                len(self.user_ids),
+                len(self.movie_ids),
+                len(rows),
+                len(train_rows),
+                self.recommendation_topn,
+                len(self.user_ids) * self.recommendation_topn,
+            )
         )
 
     def gernate_dataset(self, mergedfile):
@@ -240,8 +273,14 @@ class DCN(object):
         ).to(self.device)
 
         loader = self._make_loader(self.train_arrays, shuffle=True)
-        optimizer = torch.optim.Adam(self.model.parameters(), lr=1e-3, weight_decay=1e-6)
+        optimizer = torch.optim.Adam(
+            self.model.parameters(),
+            lr=self.learning_rate,
+            weight_decay=self.weight_decay,
+        )
         criterion = nn.BCEWithLogitsLoss()
+        best_state_dict = None
+        stale_validations = 0
 
         self.model.train()
         for epoch in range(1, self.epochs + 1):
@@ -263,7 +302,45 @@ class DCN(object):
 
                 total_loss += loss.item() * labels.size(0)
                 total_count += labels.size(0)
-            print("Epoch %d/%d - loss: %.4f" % (epoch, self.epochs, total_loss / total_count))
+            message = "Epoch %d/%d - loss: %.4f" % (epoch, self.epochs, total_loss / total_count)
+            if self.valid_interval > 0 and epoch % self.valid_interval == 0:
+                valid_metrics = self._evaluate_topn_split(
+                    self.valid_positive_by_user,
+                    self.train_rated_by_user,
+                    verbose=False,
+                )
+                valid_mrr = valid_metrics["mrr"]
+                message += " - valid_mrr@%d: %.4f" % (self.topn, valid_mrr)
+                if valid_mrr > self.best_valid_mrr + self.min_delta:
+                    self.best_valid_mrr = valid_mrr
+                    self.best_epoch = epoch
+                    stale_validations = 0
+                    best_state_dict = copy.deepcopy(self.model.state_dict())
+                    message += " *best*"
+                else:
+                    stale_validations += 1
+                    message += " - stale:%d/%d" % (stale_validations, self.early_stop_patience)
+
+            if self.save_epoch_recommendations:
+                filepath = os.path.join(
+                    self.epoch_recommendation_dir,
+                    "dcn_epoch_%03d_recommender.csv" % epoch,
+                )
+                self.generate_recommendation(filepath=filepath, topn=self.recommendation_topn, progress=False)
+            print(message)
+            if self.early_stop_patience > 0 and stale_validations >= self.early_stop_patience:
+                print(
+                    "早停触发: valid MRR@%d 连续 %d 次没有提升，停止于 epoch %d。"
+                    % (self.topn, self.early_stop_patience, epoch)
+                )
+                break
+
+        if best_state_dict is not None:
+            self.model.load_state_dict(best_state_dict)
+            print(
+                "加载验证集最佳 checkpoint: epoch %d, Valid MRR@%d=%.4f"
+                % (self.best_epoch, self.topn, self.best_valid_mrr)
+            )
 
     def evaluate(self):
         self.evaluate_topn()
@@ -322,85 +399,70 @@ class DCN(object):
         print("F1-Score: %.4f" % self.metrics["f1"])
         print("AUC: %.4f" % self.metrics["auc"])
 
-        os.makedirs("./outputs", exist_ok=True)
-        with open("./outputs/dcn_metrics.csv", "w", newline="") as f:
-            writer = csv.writer(f)
-            writer.writerow(["model", "accuracy", "precision", "recall", "f1", "auc"])
-            writer.writerow(
-                [
-                    "DCN",
-                    "%.4f" % self.metrics["accuracy"],
-                    "%.4f" % self.metrics["precision"],
-                    "%.4f" % self.metrics["recall"],
-                    "%.4f" % self.metrics["f1"],
-                    "%.4f" % self.metrics["auc"],
-                ]
-            )
-
     def evaluate_topn(self):
+        mask_items_by_user = defaultdict(set)
+        for user_id, items in self.train_rated_by_user.items():
+            mask_items_by_user[user_id].update(items)
+        for user_id, items in self.valid_positive_by_user.items():
+            mask_items_by_user[user_id].update(items)
+        return self._evaluate_topn_split(self.test_positive_by_user, mask_items_by_user, label="Test")
+
+    def _evaluate_topn_split(self, eval_items_by_user, mask_items_by_user, label="Test", verbose=True):
         N = self.topn
-        hit = 0
-        test_count = 0
+        precision_sum = 0.0
+        recall_sum = 0.0
         ndcg_sum = 0
-        map_sum = 0
+        mrr_sum = 0.0
+        hit_user_count = 0
         eval_user_count = 0
         all_movie_idx = torch.arange(len(self.movie_ids), dtype=torch.long, device=self.device)
 
-        print("======================")
-        print("【TopN推荐评估】(rating>=%d, N=%d)" % (self.rating_threshold, N))
-        print("======================")
-
         for i, user_id in enumerate(self.user_ids):
-            if i % 500 == 0:
+            if verbose and i % 500 == 0:
                 print("topn evaluate for %d users" % i, file=sys.stderr)
-            test_movies = self.test_positive_by_user.get(int(user_id), set())
-            if not test_movies:
+            eval_movies = eval_items_by_user.get(int(user_id), set())
+            if not eval_movies:
                 continue
             scores = self._predict_user_movies(user_id, all_movie_idx)
-            for movie_id in self.train_rated_by_user.get(int(user_id), set()):
+            for movie_id in mask_items_by_user.get(int(user_id), set()):
                 scores[self.movie2idx[int(movie_id)]] = -1.0
             top_idx = np.argpartition(scores, -N)[-N:]
             top_idx = top_idx[np.argsort(scores[top_idx])[::-1]]
             rec_movies = [self.idx2movie[int(idx)] for idx in top_idx]
 
             dcg = 0
-            ap = 0
             user_hit = 0
+            reciprocal_rank = 0.0
             for rank, movie_id in enumerate(rec_movies, start=1):
-                if movie_id in test_movies:
-                    hit += 1
+                if movie_id in eval_movies:
                     user_hit += 1
                     dcg += 1 / np.log2(rank + 1)
-                    ap += user_hit / rank
+                    if reciprocal_rank == 0.0:
+                        reciprocal_rank = 1 / rank
 
-            ideal_hits = min(len(test_movies), N)
+            ideal_hits = min(len(eval_movies), N)
             idcg = sum(1 / np.log2(rank + 1) for rank in range(1, ideal_hits + 1))
+            precision_sum += user_hit / N
+            recall_sum += user_hit / len(eval_movies)
             ndcg_sum += dcg / idcg if idcg else 0
-            map_sum += ap / ideal_hits if ideal_hits else 0
-            test_count += len(test_movies)
+            mrr_sum += reciprocal_rank
+            if user_hit > 0:
+                hit_user_count += 1
             eval_user_count += 1
 
-        precision = hit / (1.0 * eval_user_count * N) if eval_user_count else 0
-        recall = hit / (1.0 * test_count) if test_count else 0
-        ndcg = ndcg_sum / eval_user_count if eval_user_count else 0
-        mean_ap = map_sum / eval_user_count if eval_user_count else 0
-
-        print("Precision@%d: %.4f" % (N, precision))
-        print("Recall@%d: %.4f" % (N, recall))
-        print("NDCG@%d: %.4f" % (N, ndcg))
-        print("MAP@%d: %.4f" % (N, mean_ap))
-
-        os.makedirs("./outputs", exist_ok=True)
-        with open("./outputs/metrics.csv", "a", newline="") as f:
-            writer = csv.writer(f)
-            writer.writerow(["DCN", "%.4f" % precision, "%.4f" % recall, "%.4f" % ndcg, "%.4f" % mean_ap])
-        topn_metrics_file = "./outputs/topn_metrics.csv"
-        write_header = not os.path.exists(topn_metrics_file)
-        with open(topn_metrics_file, "a", newline="") as f:
-            writer = csv.writer(f)
-            if write_header:
-                writer.writerow(["model", "N", "precision", "recall", "ndcg", "map"])
-            writer.writerow(["DCN", N, "%.4f" % precision, "%.4f" % recall, "%.4f" % ndcg, "%.4f" % mean_ap])
+        metrics = {
+            "recall": recall_sum / eval_user_count if eval_user_count else 0,
+            "mrr": mrr_sum / eval_user_count if eval_user_count else 0,
+            "ndcg": ndcg_sum / eval_user_count if eval_user_count else 0,
+            "hit": hit_user_count / eval_user_count if eval_user_count else 0,
+            "precision": precision_sum / eval_user_count if eval_user_count else 0,
+        }
+        if verbose:
+            print(
+                "测试集 %s RECALL@%d : %.4f    MRR@%d : %.4f    NDCG@%d : %.4f    HIT@%d : %.4f    PRECISION@%d : %.4f"
+                % (label, N, metrics["recall"], N, metrics["mrr"], N, metrics["ndcg"], N, metrics["hit"], N, metrics["precision"])
+            )
+        return metrics
 
     def _predict_loader(self, loader):
         self.model.eval()
@@ -420,22 +482,35 @@ class DCN(object):
                 y_true.append(labels.numpy())
         return np.concatenate(y_true).astype(np.int32), np.concatenate(y_score)
 
-    def generate_recommendation(self):
-        print("generating DCN recommendation result...", file=sys.stderr)
-        os.makedirs("./outputs", exist_ok=True)
+    def generate_recommendation(
+        self,
+        filepath="./outputs/dcn_recommendation.csv",
+        topn=None,
+        progress=True,
+    ):
+        topn = topn or self.recommendation_topn
+        print("generating DCN recommendation result: %s" % filepath)
+        output_dir = os.path.dirname(filepath)
+        if output_dir:
+            os.makedirs(output_dir, exist_ok=True)
         all_movie_idx = torch.arange(len(self.movie_ids), dtype=torch.long, device=self.device)
-        with open("./outputs/dcn_recommendation.csv", "w", newline="") as f:
+        with open(filepath, "w", newline="") as f:
+            writer = csv.writer(f)
+            writer.writerow(["user_id"] + ["rec%d" % idx for idx in range(1, topn + 1)])
             for i, user_id in enumerate(self.user_ids):
-                if i % 500 == 0:
+                if progress and i % 500 == 0:
                     print("generate DCN recommendation for %d users" % i, file=sys.stderr)
                 scores = self._predict_user_movies(user_id, all_movie_idx)
                 rated = self.train_rated_by_user[int(user_id)]
                 for movie_id in rated:
                     scores[self.movie2idx[int(movie_id)]] = -1.0
-                top_idx = np.argpartition(scores, -self.topn)[-self.topn:]
+                top_k = min(topn, len(scores))
+                top_idx = np.argpartition(scores, -top_k)[-top_k:]
                 top_idx = top_idx[np.argsort(scores[top_idx])[::-1]]
                 movies = [str(self.idx2movie[int(idx)]) for idx in top_idx]
-                f.write("%s,%s\n" % (user_id, ",".join(movies)))
+                if len(movies) < topn:
+                    movies.extend([""] * (topn - len(movies)))
+                writer.writerow([user_id] + movies)
         print("generate DCN recommendation result succ", file=sys.stderr)
 
     def gernate_recommendation(self):
@@ -451,3 +526,55 @@ class DCN(object):
         with torch.no_grad():
             logits = self.model(user_idx, all_movie_idx, gender_tensor, age_tensor, occupation_tensor)
             return torch.sigmoid(logits).detach().cpu().numpy()
+
+
+def build_arg_parser():
+    parser = argparse.ArgumentParser(description="Run DCN and export Spec recommender tables.")
+    parser.add_argument("--merged-file", default="./data/ml-1m/ml-1m/merged.dat")
+    parser.add_argument("--epochs", type=int, default=5)
+    parser.add_argument("--batch-size", type=int, default=8192)
+    parser.add_argument("--learning-rate", type=float, default=1e-3)
+    parser.add_argument("--weight-decay", type=float, default=1e-6)
+    parser.add_argument("--train-neg-per-positive", type=int, default=2)
+    parser.add_argument("--topn", type=int, default=10)
+    parser.add_argument("--recommendation-topn", type=int, default=100)
+    parser.add_argument("--rating-threshold", type=int, default=3)
+    parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--valid-interval", type=int, default=1)
+    parser.add_argument("--early-stop-patience", type=int, default=10)
+    parser.add_argument("--min-delta", type=float, default=1e-6)
+    parser.add_argument("--save-epoch-recommendations", action="store_true")
+    parser.add_argument("--epoch-recommendation-dir", default="./outputs")
+    parser.add_argument("--skip-final-recommendation", action="store_true")
+    parser.add_argument("--skip-evaluation", action="store_true")
+    return parser
+
+
+def main():
+    args = build_arg_parser().parse_args()
+    dcn = DCN(
+        topn=args.topn,
+        rating_threshold=args.rating_threshold,
+        epochs=args.epochs,
+        batch_size=args.batch_size,
+        learning_rate=args.learning_rate,
+        weight_decay=args.weight_decay,
+        train_neg_per_positive=args.train_neg_per_positive,
+        seed=args.seed,
+        recommendation_topn=args.recommendation_topn,
+        valid_interval=args.valid_interval,
+        early_stop_patience=args.early_stop_patience,
+        min_delta=args.min_delta,
+        save_epoch_recommendations=args.save_epoch_recommendations,
+        epoch_recommendation_dir=args.epoch_recommendation_dir,
+    )
+    dcn.generate_dataset(args.merged_file)
+    dcn.calc_movie_sim()
+    if not args.skip_evaluation:
+        dcn.evaluate()
+    if not args.skip_final_recommendation:
+        dcn.generate_recommendation(topn=args.recommendation_topn)
+
+
+if __name__ == "__main__":
+    main()

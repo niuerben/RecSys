@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>MovieLens-1M Metric Server</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <section class="upload-panel" aria-labelledby="upload-title">
+        <div>
+          <h1 id="upload-title">提交500道 recommender</h1>
+          <p class="subtle">上传单个最终 test CSV，或上传包含多 epoch valid/test CSV 的 ZIP。</p>
+        </div>
+        <form id="upload-form" class="upload-form">
+          <label class="field-label" for="method-name">模型名称</label>
+          <input id="method-name" name="method_name" value="Your Result" autocomplete="off" />
+
+          <label class="dropzone" for="files">
+            <span class="drop-title">上传文件</span>
+            <span class="drop-copy">支持 .csv / .zip / 多文件选择</span>
+            <input id="files" name="files" type="file" multiple accept=".csv,.zip" />
+          </label>
+          <div id="file-list" class="file-list">尚未选择文件</div>
+
+          <button type="submit">提交</button>
+        </form>
+        <div id="message" class="message" role="status"></div>
+      </section>
+
+      <section class="results" aria-labelledby="results-title">
+        <h2 id="results-title">Evaluation Results</h2>
+        <div id="summary" class="summary"></div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Method</th>
+                <th>Recall@10</th>
+                <th>MRR@10</th>
+                <th>NDCG@10</th>
+                <th>Hit@10</th>
+                <th>Precision@10</th>
+              </tr>
+            </thead>
+            <tbody id="result-body"></tbody>
+          </table>
+        </div>
+      </section>
+    </main>
+    <script src="/static/app.js"></script>
+  </body>
+</html>

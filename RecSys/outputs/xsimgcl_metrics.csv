@@ -1,0 +1,10 @@
+model,N,recall,mrr,ndcg,hit,precision,map
+XSimGCL,10,0.1202,0.4007,0.2269,0.7609,0.1700,0.1207
+model,split,N,best_epoch,valid_mrr,recall,mrr,ndcg,hit,precision,map
+XSimGCL,Test,10,2,0.5500,1.0000,0.5000,0.6262,1.0000,0.1000,0.5000
+model,split,N,best_epoch,valid_mrr,recall,mrr,ndcg,hit,precision,map
+XSimGCL,Test,10,40,0.3895,0.2079,0.4602,0.2727,0.7589,0.1973,0.1626
+model,split,N,best_epoch,valid_mrr,recall,mrr,ndcg,hit,precision,map
+XSimGCL,Test,10,2,0.5500,1.0000,0.5000,0.6262,1.0000,0.1000,0.5000
+model,split,N,best_epoch,valid_mrr,recall,mrr,ndcg,hit,precision,map
+XSimGCL,Test,10,40,0.3895,0.2078,0.4602,0.2727,0.7589,0.1973,0.1626

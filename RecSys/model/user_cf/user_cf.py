@@ -7,8 +7,8 @@ import sys
 import random
 import math
 import os
-import time
 import csv
+from pathlib import Path
 from operator import itemgetter
 
 
@@ -18,13 +18,14 @@ random.seed(0)
 class UserCF(object):
     ''' TopN recommendation - User Based Collaborative Filtering '''
 
-    def __init__(self, rating_threshold=3):
+    def __init__(self, rating_threshold=3, recommendation_topn=100):
         self.trainset = {}
         self.testset = {}
         self.train_ratedset = {}
+        self.user_ids = []
 
         self.n_sim_user = 20
-        self.n_rec_movie = 10
+        self.n_rec_movie = recommendation_topn
         self.rating_threshold = rating_threshold
         
         
@@ -32,45 +33,62 @@ class UserCF(object):
         self.movie_popular = {}
         self.movie_count = 0
 
-        print ('Similar user number = %d' % self.n_sim_user, file=sys.stderr)
-        print ('recommended movie number = %d' %
-               self.n_rec_movie, file=sys.stderr)
-
-
     # 先过滤rating<3，再按8:1:1切分，验证集当前不参与训练和评估
-    def generate_dataset(self, filename, pivot=0.8, valid_ratio=0.1):
+    def generate_dataset(self, filename, usersfile=None, pivot=0.8, valid_ratio=0.1):
         ''' load rating data and split it to training set and test set '''
+        print("使用设备:cpu")
+        print("加载 UserCF 数据...")
         trainset_len = 0
         testset_len = 0
         train_rated_len = 0
+        observed_users = set()
+        observed_movies = set()
+        positive_interactions = 0
 
-        fp = open(filename, 'r')
-        for line in fp:
-            user, movie, rating, _ = line.split('::')
-            rating = int(rating)
-            if rating < self.rating_threshold:
-                continue
+        with open(filename, 'r') as fp:
+            for line in fp:
+                user, movie, rating, _ = line.split('::')
+                observed_users.add(user)
+                rating = int(rating)
+                if rating < self.rating_threshold:
+                    continue
+                observed_movies.add(movie)
+                positive_interactions += 1
 
-            rand_value = random.random()
-            if rand_value < pivot:
-                self.train_ratedset.setdefault(user, set())
-                self.train_ratedset[user].add(movie)
-                train_rated_len += 1
-                self.trainset.setdefault(user, {})
-                self.trainset[user][movie] = rating
-                trainset_len += 1
-            elif rand_value >= pivot + valid_ratio:
-                self.testset.setdefault(user, {})
-                self.testset[user][movie] = rating
-                testset_len += 1
+                rand_value = random.random()
+                if rand_value < pivot:
+                    self.train_ratedset.setdefault(user, set())
+                    self.train_ratedset[user].add(movie)
+                    train_rated_len += 1
+                    self.trainset.setdefault(user, {})
+                    self.trainset[user][movie] = rating
+                    trainset_len += 1
+                elif rand_value >= pivot + valid_ratio:
+                    self.testset.setdefault(user, {})
+                    self.testset[user][movie] = rating
+                    testset_len += 1
 
-        print ('split training set and test set succ', file=sys.stderr)
-        print ('positive train set = %s' % trainset_len, file=sys.stderr)
-        print ('positive test set = %s' % testset_len, file=sys.stderr)
-        print ('train rated set = %s' % train_rated_len, file=sys.stderr)
+        if usersfile and os.path.exists(usersfile):
+            with open(usersfile, 'r', encoding='latin-1') as f:
+                self.user_ids = [line.rstrip('\n').split('::')[0] for line in f if line.strip()]
+        else:
+            self.user_ids = sorted(observed_users, key=lambda value: int(value))
+
+        print(
+            "用户数:%d，电影数:%d，交互数:%d，训练:%d，Top%d 推荐列: %d"
+            % (
+                len(self.user_ids),
+                len(observed_movies),
+                positive_interactions,
+                trainset_len,
+                self.n_rec_movie,
+                len(self.user_ids) * self.n_rec_movie,
+            )
+        )
 
     def calc_user_sim(self):
         ''' calculate user similarity matrix '''
+        print("加载模型 UserCF...")
         # 建立电影到用户的倒排表
         # key=movieID, value=list of userIDs who have seen this movie
         print ('building movie-users inverse table...', file=sys.stderr)
@@ -147,13 +165,14 @@ class UserCF(object):
         print ('Evaluation start...', file=sys.stderr)
 
         N = self.n_rec_movie
-        hit = 0
-        test_count = 0
+        precision_sum = 0.0
+        recall_sum = 0.0
         ndcg_sum = 0
-        map_sum = 0
+        mrr_sum = 0.0
+        hit_user_count = 0
         eval_user_count = 0
 
-        for i, user in enumerate(self.trainset):
+        for i, user in enumerate(self.user_ids or self.trainset):
             if i % 500 == 0:
                 print ('recommended for %d users' % i, file=sys.stderr)
             test_movies = self.testset.get(user, {})
@@ -161,57 +180,66 @@ class UserCF(object):
                 continue
             rec_movies = self.recommend(user)
             dcg = 0
-            ap = 0
             user_hit = 0
+            reciprocal_rank = 0.0
             for rank, (movie, _) in enumerate(rec_movies, start=1):
                 if movie in test_movies:
-                    hit += 1
                     user_hit += 1
                     dcg += 1 / math.log2(rank + 1)
-                    ap += user_hit / rank
+                    if reciprocal_rank == 0.0:
+                        reciprocal_rank = 1 / rank
 
             ideal_hits = min(len(test_movies), N)
             idcg = sum(1 / math.log2(rank + 1) for rank in range(1, ideal_hits + 1))
+            precision_sum += user_hit / N
+            recall_sum += user_hit / len(test_movies)
             ndcg_sum += dcg / idcg if idcg else 0
-            map_sum += ap / ideal_hits if ideal_hits else 0
-            test_count += len(test_movies)
+            mrr_sum += reciprocal_rank
+            if user_hit > 0:
+                hit_user_count += 1
             eval_user_count += 1
 
-        precision = hit / (1.0 * eval_user_count * N) if eval_user_count else 0
-        recall = hit / (1.0 * test_count) if test_count else 0
-        ndcg = ndcg_sum / eval_user_count if eval_user_count else 0
-        mean_ap = map_sum / eval_user_count if eval_user_count else 0
+        metrics = {
+            "recall": recall_sum / eval_user_count if eval_user_count else 0,
+            "mrr": mrr_sum / eval_user_count if eval_user_count else 0,
+            "ndcg": ndcg_sum / eval_user_count if eval_user_count else 0,
+            "hit": hit_user_count / eval_user_count if eval_user_count else 0,
+            "precision": precision_sum / eval_user_count if eval_user_count else 0,
+        }
+        print(
+            "测试集 Test RECALL@%d : %.4f    MRR@%d : %.4f    NDCG@%d : %.4f    HIT@%d : %.4f    PRECISION@%d : %.4f"
+            % (N, metrics["recall"], N, metrics["mrr"], N, metrics["ndcg"], N, metrics["hit"], N, metrics["precision"])
+        )
+        return metrics
 
-        print ('Precision@%d: %.4f' % (N, precision))
-        print ('Recall@%d: %.4f' % (N, recall))
-        print ('NDCG@%d: %.4f' % (N, ndcg))
-        print ('MAP@%d: %.4f' % (N, mean_ap))
-
-        with open('./outputs/metrics.csv', 'a') as f:
-            f.write('"UserCF",%.4f,%.4f,%.4f,%.4f\n' % (precision, recall, ndcg, mean_ap))
-        topn_metrics_file = './outputs/topn_metrics.csv'
-        write_header = not os.path.exists(topn_metrics_file)
-        with open(topn_metrics_file, 'a', newline='') as f:
-            writer = csv.writer(f)
-            if write_header:
-                writer.writerow(['model', 'N', 'precision', 'recall', 'ndcg', 'map'])
-            writer.writerow(['UserCF', N, '%.4f' % precision, '%.4f' % recall, '%.4f' % ndcg, '%.4f' % mean_ap])
-
-    def generate_recommendation(self):
+    def generate_recommendation(self, filepath='./RecSys/outputs/user_cf_recommendation.csv', topn=None):
         ''' 输出推荐结果 '''
-        print ('generating recommendation result...', file=sys.stderr)
-        with open('./outputs/usercf_recommendation.csv', 'w') as f:
-            for i, user in enumerate(self.trainset):
+        topn = topn or self.n_rec_movie
+        old_topn = self.n_rec_movie
+        self.n_rec_movie = topn
+        users = self.user_ids or sorted(self.trainset, key=lambda value: int(value))
+
+        print ('generating UserCF recommendation result: %s' % filepath)
+        Path(filepath).parent.mkdir(parents=True, exist_ok=True)
+        with open(filepath, 'w', newline='') as f:
+            writer = csv.writer(f)
+            writer.writerow(['user_id'] + ['rec%d' % i for i in range(1, topn + 1)])
+            for i, user in enumerate(users):
                 if i % 500 == 0:
                     print ('generate recommendation for %d users' % i, file=sys.stderr)
                 rec_movies = self.recommend(user)
-                f.write('%s,%s\n' % (user, ','.join([movie for movie, _ in rec_movies])))
+                movie_ids = [movie for movie, _ in rec_movies[:topn]]
+                movie_ids.extend([''] * (topn - len(movie_ids)))
+                writer.writerow([user] + movie_ids)
+        self.n_rec_movie = old_topn
         print ('generate recommendation result succ', file=sys.stderr)
 
 if __name__ == '__main__':
-    ratingfile = "./data/ml-1m/ml-1m/ratings.dat"
+    recsys_root = Path(__file__).resolve().parents[2]
+    ratingfile = recsys_root / "data" / "ml-1m" / "ratings.dat"
+    usersfile = recsys_root / "data" / "ml-1m" / "users.dat"
+    outputfile = recsys_root / "outputs" / "user_cf_recommendation.csv"
     usercf = UserCF()
-    usercf.generate_dataset(ratingfile)
+    usercf.generate_dataset(str(ratingfile), usersfile=str(usersfile))
     usercf.calc_user_sim()
-    usercf.evaluate()
-    usercf.generate_recommendation()
+    usercf.generate_recommendation(filepath=str(outputfile))

@@ -7,7 +7,7 @@ from sklearn.model_selection import StratifiedKFold
 from DataReader import FeatureDictionary, DataParser
 from matplotlib import pyplot as plt
 
-import config
+import RecSys.model.PNN.config as config
 from model import PNN
 
 def load_data():
