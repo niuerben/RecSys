@@ -1,0 +1,6 @@
+numpy>=1.24
+torch>=2.2
+fastapi>=0.110
+uvicorn[standard]>=0.27
+python-multipart>=0.0.9
+matplotlib>=3.7

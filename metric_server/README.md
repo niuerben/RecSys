@@ -15,14 +15,12 @@ pip install -r metric_server/requirements.txt
 uvicorn metric_server.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
-当前机器可用 `web` conda 环境：
-
-```bash
-/home/niuerben/.miniconda3/envs/web/bin/python -m uvicorn metric_server.main:app --host 0.0.0.0 --port 8000
+```ps1
+pip install -r metric_server/requirements.txt
+uvicorn main:app --reload --host 0.0.0.0 --port 8000
 ```
 
 打开：
-
 ```text
 http://127.0.0.1:8000
 ```
@@ -36,16 +34,16 @@ http://127.0.0.1:8000
 适合只测最终推荐结果。格式可以是宽表：
 
 ```csv
-user_id,item_1,item_2,item_3
-1,1193,661,914
-2,1357,3068,1537
+user_id,recommendations1,recommendations2,...,recommendations100
+1,1193,661,...,260
+2,1357,3068,...,1198
 ```
 
 也支持无表头：
 
 ```csv
-1,1193,661,914
-2,1357,3068,1537
+1,1193,661,...,260
+2,1357,3068,...,1198
 ```
 
 ### 多 epoch valid/test CSV 或 ZIP
@@ -92,3 +90,7 @@ user_id,item_id,score
 - test：mask train + valid items
 
 因此推荐上传 Top100 或更长列表。若只上传 Top10，mask 后可能不足 10 个候选，会影响结果。
+
+当前测评机会只使用每个用户提交的前 100 个推荐 item；之后执行 mask，再取过滤后的 Top10 计算 `Precision@10 / Recall@10 / MRR@10 / NDCG@10 / Hit@10`。
+
+合法 item 集合来自 `ratings.dat` 中出现过的全部 item。`rating < 3` 的 item 不会被当作命中目标，但如果被推荐，会保留在候选列表中并占用 Top10 位置。

@@ -12,7 +12,7 @@ import numpy as np
 
 REFERENCE_ROWS = [
     {"method": "BPR", "recall": 0.1776, "mrr": 0.4187, "ndcg": 0.2401, "hit": 0.7199, "precision": 0.1779},
-    {"method": "NeuMF", "recall": 0.1651, "mrr": 0.4020, "ndcg": 0.2271, "hit": 0.7029, "precision": 0.1700},
+    {"method": "NeuMF/NCF", "recall": 0.1651, "mrr": 0.4020, "ndcg": 0.2271, "hit": 0.7029, "precision": 0.1700},
     {"method": "NGCF", "recall": 0.1814, "mrr": 0.4354, "ndcg": 0.2508, "hit": 0.7239, "precision": 0.1850},
     {"method": "LightGCN", "recall": 0.1861, "mrr": 0.4388, "ndcg": 0.2538, "hit": 0.7330, "precision": 0.1863},
     {"method": "LightGCL", "recall": 0.1867, "mrr": 0.4283, "ndcg": 0.2479, "hit": 0.7370, "precision": 0.1815},
@@ -31,14 +31,16 @@ class SubmittedFile:
 
 
 class ML1MEvaluator:
-    def __init__(self, data_dir: str, topk: int = 10, seed: int = 2020):
+    def __init__(self, data_dir: str, topk: int = 10, submission_topk: int = 100, seed: int = 2020):
         self.data_dir = data_dir
         self.topk = topk
+        self.submission_topk = submission_topk
         self.seed = seed
         self.rng = np.random.default_rng(seed)
 
         self.user_ids: List[int] = []
         self.item_ids: List[int] = []
+        self.item_id_set = set()
         self.train_items_by_user: Dict[int, set] = defaultdict(set)
         self.valid_items_by_user: Dict[int, set] = defaultdict(set)
         self.test_items_by_user: Dict[int, set] = defaultdict(set)
@@ -53,14 +55,18 @@ class ML1MEvaluator:
             self.user_ids = sorted(int(line.rstrip("\n").split("::", 1)[0]) for line in f)
 
         interactions: List[Tuple[int, int]] = []
+        all_rated_item_ids = set()
         with open(ratings_file, "r", encoding="latin-1") as f:
             for line in f:
                 user, item, rating, _ = line.rstrip("\n").split("::")
+                item_id = int(item)
+                all_rated_item_ids.add(item_id)
                 if int(rating) >= 3:
-                    interactions.append((int(user), int(item)))
+                    interactions.append((int(user), item_id))
 
         self.rng.shuffle(interactions)
-        self.item_ids = sorted({item for _, item in interactions})
+        self.item_ids = sorted(all_rated_item_ids)
+        self.item_id_set = set(self.item_ids)
 
         interactions_by_user: Dict[int, List[int]] = defaultdict(list)
         for user, item in interactions:
@@ -85,11 +91,13 @@ class ML1MEvaluator:
         self.stats = {
             "users": len(self.user_ids),
             "items": len(self.item_ids),
+            "positive_items": len({item for _, item in interactions}),
             "interactions": len(interactions),
             "train": train_count,
             "valid": valid_count,
             "test": test_count,
             "topk": self.topk,
+            "submission_topk": self.submission_topk,
             "seed": self.seed,
         }
 
@@ -109,7 +117,7 @@ class ML1MEvaluator:
         valid_end = counts[0] + counts[1]
         return items[:train_end], items[train_end:valid_end], items[valid_end:]
 
-    def evaluate_submission_files(self, submitted_files: Sequence[SubmittedFile], method_name: str = "Your Result") -> dict:
+    def evaluate_submission_files(self, submitted_files: Sequence[SubmittedFile], method_name: str = "你的结果") -> dict:
         csv_files = self._expand_files(submitted_files)
         if not csv_files:
             raise ValueError("没有找到 CSV 文件。请上传 .csv，或包含 .csv 的 .zip。")
@@ -117,7 +125,7 @@ class ML1MEvaluator:
         grouped = {}
         for filename, content in csv_files:
             epoch, split = self._classify_file(filename)
-            grouped[(epoch, split)] = self.parse_recommendations(content)
+            grouped[(epoch, split)] = self._limit_recommendations(self.parse_recommendations(content))
 
         valid_epochs = sorted(epoch for (epoch, split) in grouped if split == "valid")
         test_epochs = sorted(epoch for (epoch, split) in grouped if split == "test")
@@ -159,7 +167,7 @@ class ML1MEvaluator:
             }
 
         user_row = {
-            "method": method_name or "Your Result",
+            "method": method_name or "你的结果",
             "recall": test_metrics["recall"],
             "mrr": test_metrics["mrr"],
             "ndcg": test_metrics["ndcg"],
@@ -176,9 +184,10 @@ class ML1MEvaluator:
     def standard_summary(self) -> dict:
         return {
             "dataset": "MovieLens-1M",
-            "filtering": "rating >= 3",
+            "filtering": "rating >= 3 as positive targets; all rated items remain valid candidates",
             "evaluation": "ratio-based 8:1:1, per-user split, full sort",
             "metrics": ["Recall@10", "MRR@10", "NDCG@10", "Hit@10", "Precision@10"],
+            "submission": "Use submitted Top100 recommendations; after mask, evaluate filtered Top10.",
             "valid_metric": "MRR@10",
             "embedding_size": 64,
             "epochs": 500,
@@ -226,6 +235,9 @@ class ML1MEvaluator:
         if match:
             epoch = int(match.group(1) if match.lastindex == 1 else match.group(2))
         return epoch, split
+
+    def _limit_recommendations(self, recommendations: Dict[int, List[int]]) -> Dict[int, List[int]]:
+        return {user: items[: self.submission_topk] for user, items in recommendations.items()}
 
     def parse_recommendations(self, content: bytes) -> Dict[int, List[int]]:
         text = content.decode("utf-8-sig", errors="ignore")
@@ -335,9 +347,8 @@ class ML1MEvaluator:
     def _filtered_topk(self, items: Sequence[int], masked_items: set) -> List[int]:
         seen = set()
         filtered = []
-        item_universe = set(self.item_ids)
         for item in items:
-            if item in seen or item in masked_items or item not in item_universe:
+            if item in seen or item in masked_items or item not in self.item_id_set:
                 continue
             seen.add(item)
             filtered.append(item)

@@ -3,7 +3,6 @@ const filesInput = document.querySelector("#files");
 const fileList = document.querySelector("#file-list");
 const message = document.querySelector("#message");
 const resultBody = document.querySelector("#result-body");
-const summary = document.querySelector("#summary");
 const submitButton = form.querySelector("button");
 
 function fmt(value) {
@@ -32,28 +31,6 @@ function renderTable(rows) {
   });
 }
 
-function renderSummary(payload) {
-  const standard = payload.standard || {};
-  const stats = standard.stats || {};
-  const selection = payload.selection;
-  const pills = [
-    `Dataset: ${standard.dataset || "MovieLens-1M"}`,
-    `Filtering: ${standard.filtering || "rating >= 3"}`,
-    `Evaluation: ${standard.evaluation || "8:1:1 full sort"}`,
-    `Users: ${stats.users ?? ""}`,
-    `Items: ${stats.items ?? ""}`,
-    `Train/Valid/Test: ${stats.train ?? ""}/${stats.valid ?? ""}/${stats.test ?? ""}`,
-  ];
-  if (selection) {
-    pills.push(`Mode: ${selection.mode}`);
-    pills.push(`Best epoch: ${selection.best_epoch}`);
-    if (selection.valid_mrr !== null && selection.valid_mrr !== undefined) {
-      pills.push(`Valid MRR@10: ${fmt(selection.valid_mrr)}`);
-    }
-  }
-  summary.innerHTML = pills.map((pill) => `<span class="pill">${pill}</span>`).join("");
-}
-
 function setMessage(text, kind = "") {
   message.textContent = text;
   message.className = `message ${kind}`;
@@ -62,7 +39,6 @@ function setMessage(text, kind = "") {
 async function loadStandard() {
   const response = await fetch("/api/standard");
   const payload = await response.json();
-  renderSummary(payload);
   renderTable(payload.table);
 }
 
@@ -91,7 +67,6 @@ form.addEventListener("submit", async (event) => {
     if (!response.ok) {
       throw new Error(payload.detail || "测评失败");
     }
-    renderSummary(payload);
     renderTable(payload.table);
     setMessage("测评完成。", "ok");
   } catch (error) {

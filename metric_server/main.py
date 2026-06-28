@@ -14,8 +14,28 @@ except ImportError:
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(BASE_DIR)
-DATA_DIR = os.path.join(PROJECT_ROOT, "data", "ml-1m", "ml-1m")
 STATIC_DIR = os.path.join(BASE_DIR, "static")
+
+
+def resolve_data_dir() -> str:
+    candidates = [
+        os.environ.get("ML1M_DATA_DIR"),
+        os.path.join(BASE_DIR, "ml-1m"),
+        os.path.join(PROJECT_ROOT, "data", "ml-1m", "ml-1m"),
+        os.path.join(PROJECT_ROOT, "RecommenderSystems", "data", "ml-1m", "ml-1m"),
+        os.path.join(BASE_DIR, "data", "ml-1m", "ml-1m"),
+    ]
+    for candidate in candidates:
+        if not candidate:
+            continue
+        users_file = os.path.join(candidate, "users.dat")
+        ratings_file = os.path.join(candidate, "ratings.dat")
+        if os.path.isfile(users_file) and os.path.isfile(ratings_file):
+            return candidate
+    return candidates[1]
+
+
+DATA_DIR = resolve_data_dir()
 
 
 app = FastAPI(title="MovieLens-1M Metric Server")
@@ -40,7 +60,7 @@ def standard():
 
 @app.post("/api/evaluate")
 async def evaluate(
-    method_name: str = Form("Your Result"),
+    method_name: str = Form("你的结果"),
     files: List[UploadFile] = File(...),
 ):
     submitted = []

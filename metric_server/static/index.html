@@ -3,20 +3,25 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>MovieLens-1M Metric Server</title>
-    <link rel="stylesheet" href="/static/styles.css" />
+    <title>MovieLens-1M 模型性能测评服务器</title>
+    <link rel="stylesheet" href="/static/styles.css?v=8" />
   </head>
   <body>
     <main class="shell">
       <section class="upload-panel" aria-labelledby="upload-title">
         <div>
-          <h1 id="upload-title">提交500道 recommender</h1>
-          <p class="subtle">上传单个最终 test CSV，或上传包含多 epoch valid/test CSV 的 ZIP。</p>
+          <h1 id="upload-title">提交用户推荐表</h1>
+          <div class="upload-note">
+            <p>支持上传：</p>
+            <ul>
+              <li>单个最终 recommender.csv</li>
+              <li>多轮 recommender_*.csv 的 ZIP</li>
+            </ul>
+            <p>推荐表的表列格式：</p>
+            <p>user_id, recommendations1, recommendations2, ..., recommendations100</p>
+          </div>
         </div>
         <form id="upload-form" class="upload-form">
-          <label class="field-label" for="method-name">模型名称</label>
-          <input id="method-name" name="method_name" value="Your Result" autocomplete="off" />
-
           <label class="dropzone" for="files">
             <span class="drop-title">上传文件</span>
             <span class="drop-copy">支持 .csv / .zip / 多文件选择</span>
@@ -30,13 +35,12 @@
       </section>
 
       <section class="results" aria-labelledby="results-title">
-        <h2 id="results-title">Evaluation Results</h2>
-        <div id="summary" class="summary"></div>
+        <h2 id="results-title">模型性能榜单</h2>
         <div class="table-wrap">
           <table>
             <thead>
               <tr>
-                <th>Method</th>
+                <th>Model</th>
                 <th>Recall@10</th>
                 <th>MRR@10</th>
                 <th>NDCG@10</th>
@@ -47,6 +51,15 @@
             <tbody id="result-body"></tbody>
           </table>
         </div>
+      </section>
+
+      <section class="appendix" aria-labelledby="appendix-title">
+        <h2 id="appendix-title">评估协议</h2>
+        <p>数据集：<a href="https://grouplens.org/datasets/movielens/1m/" target="_blank" rel="noopener noreferrer">MovieLens-1M</a></p>
+        <p>数据划分：测评机从 rating 表中按用户随机化后 10% 作为测试集。提交推荐表无需考虑数据划分。</p>
+        <p>正样本定义：rating &gt;= 3；rating &lt; 3 的 item 仍是合法候选，但不算命中。不在测试集但在 rating 表中的 item 被 mask，不在 rating 表中的 item 被视为负样本</p>
+        <p>评测规则：提交 Top100 推荐，mask 后取过滤后的 Top10 计算指标。</p>
+        <p>用户数为 6040。支持空用户。每个用户至多推荐 top100 个物品。</p>
       </section>
     </main>
     <script src="/static/app.js"></script>

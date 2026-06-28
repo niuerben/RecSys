@@ -10,6 +10,3 @@ https://grouplens.org/datasets/movielens/1m/
 - RecommenderSystems/py3.x/user_cf.py
 - RecommenderSystems/py3.x/item_cf.py
 
-# 查看 cuda 实时占用率
-- watch -n 1 nvidia-smi
-
