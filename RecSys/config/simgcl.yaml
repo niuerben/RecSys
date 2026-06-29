@@ -1,0 +1,17 @@
+# SimGCL config
+epochs: 500
+train_batch_size: 2048
+learning_rate: 0.001
+reg_weight: 0.0001
+embedding_dim: 64
+n_layers: 3
+ssl_weight: 0.1
+temperature: 0.2
+eps: 0.1
+rating_threshold: 3
+topn: 10
+recommendation_topn: 100
+valid_interval: 1
+early_stop_patience: 10
+min_delta: 0.000001
+seed: 2020

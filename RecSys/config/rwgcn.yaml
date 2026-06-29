@@ -1,0 +1,20 @@
+# RWGCN (Rating-Weighted Graph Convolution Network) config
+# ==========================================================
+# loss_scheme A: 标准 BPR + 加权图传播
+# 图卷积使用评分加权邻接矩阵，BPR 将 rating>=threshold 视为正样本
+# ==========================================================
+epochs: 500
+train_batch_size: 2048
+learning_rate: 0.001
+reg_weight: 0.0001
+embedding_dim: 64
+n_layers: 3
+w_min: 0.2
+loss_scheme: A
+rating_threshold: 3
+topn: 10
+recommendation_topn: 100
+valid_interval: 1
+early_stop_patience: 10
+min_delta: 0.000001
+seed: 2020
