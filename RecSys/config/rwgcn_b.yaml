@@ -1,0 +1,21 @@
+# RWGCN (Rating-Weighted Graph Convolution Network) config
+# ==========================================================
+# loss_scheme B: 加权 BPR Loss
+# L = -Σ (r_ui - r_uj) · ln σ(ŷ_ui - ŷ_uj)
+# 高分交互的梯度权重更大，低分交互相对温和
+# ==========================================================
+epochs: 500
+train_batch_size: 2048
+learning_rate: 0.001
+reg_weight: 0.0001
+embedding_dim: 64
+n_layers: 3
+w_min: 0.2
+loss_scheme: B
+rating_threshold: 3
+topn: 10
+recommendation_topn: 100
+valid_interval: 1
+early_stop_patience: 10
+min_delta: 0.000001
+seed: 2020

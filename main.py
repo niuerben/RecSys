@@ -119,6 +119,31 @@ def run_lightgcn(module, config, paths):
     model.generate_recommendation(filepath=str(paths["output"]), mask_valid=True)
 
 
+def run_simgcl(module, config, paths):
+    model = module.SimGCL(
+        topn=config_get(config, "topn", default=10),
+        recommendation_topn=config_get(config, "recommendation_topn", default=100),
+        embedding_dim=config_get(config, "embedding_dim", "embedding_size", default=64),
+        n_layers=config_get(config, "n_layers", default=3),
+        epochs=config_get(config, "epochs", default=500),
+        batch_size=config_get(config, "batch_size", "train_batch_size", default=2048),
+        learning_rate=config_get(config, "learning_rate", default=0.001),
+        reg_weight=config_get(config, "reg_weight", default=1e-4),
+        ssl_weight=config_get(config, "ssl_weight", "lambda", default=0.1),
+        temperature=config_get(config, "temperature", default=0.2),
+        eps=config_get(config, "eps", default=0.1),
+        seed=config_get(config, "seed", default=2020),
+        valid_interval=config_get(config, "valid_interval", default=1),
+        early_stop_patience=config_get(config, "early_stop_patience", default=10),
+        min_delta=config_get(config, "min_delta", default=1e-6),
+        save_epoch_recommendations=False,
+    )
+    model.generate_dataset(str(paths["ratings"]), usersfile=str(paths["users"]))
+    model.calc_movie_sim()
+    model.evaluate()
+    model.generate_recommendation(filepath=str(paths["output"]), mask_valid=True)
+
+
 def run_xsimgcl(module, config, paths):
     model = module.XSimGCL(
         topn=config_get(config, "topn", default=10),
@@ -133,6 +158,29 @@ def run_xsimgcl(module, config, paths):
         temperature=config_get(config, "temperature", default=0.2),
         eps=config_get(config, "eps", default=0.2),
         layer_cl=config_get(config, "layer_cl", default=1),
+        seed=config_get(config, "seed", default=2020),
+        valid_interval=config_get(config, "valid_interval", default=1),
+        early_stop_patience=config_get(config, "early_stop_patience", default=10),
+        min_delta=config_get(config, "min_delta", default=1e-6),
+        save_epoch_recommendations=False,
+    )
+    model.generate_dataset(str(paths["ratings"]), usersfile=str(paths["users"]))
+    model.calc_movie_sim()
+    model.evaluate()
+    model.generate_recommendation(filepath=str(paths["output"]), mask_valid=True)
+
+
+def run_time_lightgcn(module, config, paths):
+    model = module.TimeLightGCN(
+        topn=config_get(config, "topn", default=10),
+        recommendation_topn=config_get(config, "recommendation_topn", default=100),
+        embedding_dim=config_get(config, "embedding_dim", "embedding_size", default=64),
+        n_layers=config_get(config, "n_layers", default=3),
+        epochs=config_get(config, "epochs", default=500),
+        batch_size=config_get(config, "batch_size", "train_batch_size", default=2048),
+        learning_rate=config_get(config, "learning_rate", default=0.001),
+        reg_weight=config_get(config, "reg_weight", default=1e-4),
+        time_decay_factor=config_get(config, "time_decay_factor", default=0.2),
         seed=config_get(config, "seed", default=2020),
         valid_interval=config_get(config, "valid_interval", default=1),
         early_stop_patience=config_get(config, "early_stop_patience", default=10),
@@ -204,11 +252,66 @@ def run_item_cf(module, config, paths):
     )
 
 
+def run_directau_lightgcn(module, config, paths):
+    model = module.DirectAU_LightGCN(
+        topn=config_get(config, "topn", default=10),
+        recommendation_topn=config_get(config, "recommendation_topn", default=100),
+        embedding_dim=config_get(config, "embedding_dim", "embedding_size", default=64),
+        n_layers=config_get(config, "n_layers", default=3),
+        epochs=config_get(config, "epochs", default=500),
+        batch_size=config_get(config, "batch_size", "train_batch_size", default=2048),
+        learning_rate=config_get(config, "learning_rate", default=0.001),
+        gamma=config_get(config, "gamma", default=1.0),
+        seed=config_get(config, "seed", default=2020),
+        valid_interval=config_get(config, "valid_interval", default=1),
+        early_stop_patience=config_get(config, "early_stop_patience", default=10),
+        min_delta=config_get(config, "min_delta", default=1e-6),
+        save_epoch_recommendations=False,
+    )
+    model.generate_dataset(str(paths["ratings"]), usersfile=str(paths["users"]))
+    model.calc_movie_sim()
+    model.evaluate()
+    model.generate_recommendation(filepath=str(paths["output"]), mask_valid=True)
+
+
+def run_rwgcn(module, config, paths):
+    loss_scheme = config_get(config, "loss_scheme", default="A").upper()
+    model = module.RWGCN(
+        topn=config_get(config, "topn", default=10),
+        recommendation_topn=config_get(config, "recommendation_topn", default=100),
+        rating_threshold=config_get(config, "rating_threshold", default=3),
+        embedding_dim=config_get(config, "embedding_dim", "embedding_size", default=64),
+        n_layers=config_get(config, "n_layers", default=3),
+        w_min=config_get(config, "w_min", default=0.2),
+        loss_scheme=loss_scheme,
+        epochs=config_get(config, "epochs", default=500),
+        batch_size=config_get(config, "batch_size", "train_batch_size", default=2048),
+        learning_rate=config_get(config, "learning_rate", default=0.001),
+        reg_weight=config_get(config, "reg_weight", default=1e-4),
+        seed=config_get(config, "seed", default=2020),
+        valid_interval=config_get(config, "valid_interval", default=1),
+        early_stop_patience=config_get(config, "early_stop_patience", default=10),
+        min_delta=config_get(config, "min_delta", default=1e-6),
+        save_epoch_recommendations=False,
+    )
+    model.generate_dataset(str(paths["ratings"]), usersfile=str(paths["users"]))
+    model.calc_movie_sim()
+    model.evaluate()
+    # 方案 A / B 分别输出到不同文件，避免互相覆盖
+    output_file = str(paths["output"]).replace(".csv", "_scheme%s.csv" % loss_scheme)
+    paths["output"] = Path(output_file)  # 同步更新，main() 打印时显示正确路径
+    model.generate_recommendation(filepath=output_file, mask_valid=True)
+
+
 RUNNERS = {
     "ncf": run_ncf,
+    "simgcl": run_simgcl,
     "xsimgcl": run_xsimgcl,
     "lightgcn": run_lightgcn,
+    "directau_lightgcn": run_directau_lightgcn,
+    "time_lightgcn": run_time_lightgcn,
     "dcn": run_dcn,
+    "rwgcn": run_rwgcn,
     "user_cf": run_user_cf,
     "item_cf": run_item_cf,
 }
@@ -216,7 +319,7 @@ RUNNERS = {
 
 def build_arg_parser():
     parser = argparse.ArgumentParser(description="RecSys unified runner.")
-    parser.add_argument("--model", required=True, help="模型名，例如 ncf、xsimgcl、lightgcn、dcn、user_cf、item_cf")
+    parser.add_argument("--model", required=True, help="模型名，例如 ncf、simgcl、xsimgcl、lightgcn、directau_lightgcn、time_lightgcn、dcn、rwgcn、user_cf、item_cf")
     parser.add_argument("--config", default=None, help="配置文件路径，例如 RecSys/config/ncf.yaml")
     return parser
 

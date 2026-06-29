@@ -1,0 +1,18 @@
+# Time-Aware LightGCN config
+epochs: 500
+train_batch_size: 2048
+learning_rate: 0.001
+reg_weight: 0.0001
+embedding_dim: 64
+n_layers: 3
+rating_threshold: 3
+topn: 10
+recommendation_topn: 100
+valid_interval: 1
+early_stop_patience: 10
+min_delta: 0.000001
+seed: 2020
+# λ for exponential time decay: higher = more emphasis on recent interactions
+# λ=0 means no decay (equivalent to vanilla LightGCN)
+time_decay_factor: 0.2
+skip_recommendation: false
